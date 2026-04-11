@@ -1,0 +1,16 @@
+# Ignore environment variables and API keys
+.env
+
+# Ignore Python virtual environments
+.venv/
+env/
+__pycache__/
+
+# Ignore data files
+*.csv
+*.tsv
+*.xlsx
+*.parquet
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
