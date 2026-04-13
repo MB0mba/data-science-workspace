@@ -1,8 +1,7 @@
 """
 predict_upcoming.py
-Production Inference Pipeline.
-Loads cached live odds, translates API team names to historical names,
-fetches the latest rolling stats, and predicts Value Bets using the serialized model.
+Production Inference Pipeline with Fractional Kelly Criterion.
+Recommends exact staking amounts based on Calibrated Probabilities.
 """
 
 import json
@@ -11,35 +10,42 @@ from pathlib import Path
 import joblib
 import pandas as pd
 
-# Entity Resolution: Translate The Odds API nomenclature to football-data.co.uk nomenclature
 TEAM_MAPPING = {
     "Inter Milan": "Inter",
     "AC Milan": "Milan",
     "AS Roma": "Roma",
     "Hellas Verona": "Verona",
     "Atalanta BC": "Atalanta",
-    # Note: If an API team name is identical to the CSV name (e.g. "Juventus" == "Juventus"),
-    # it does not need to be in this dictionary. The .get() method handles it.
 }
 
 
+def calculate_kelly_stake(
+    prob: float, decimal_odds: float, bankroll: float, fraction: float = 0.25
+) -> float:
+    """
+    Calculates the recommended bet size using the Fractional Kelly Criterion.
+    """
+    b = decimal_odds - 1.0
+    p = prob
+    q = 1.0 - p
+
+    kelly_pct = (p * b - q) / b
+
+    if kelly_pct <= 0:
+        return 0.0
+
+    return bankroll * kelly_pct * fraction
+
+
 def get_latest_team_stats(team_name: str, df: pd.DataFrame, is_home: bool) -> dict:
-    """
-    Scans the historical dataset to find the most recent rolling stats for a specific team.
-    """
-    # Filter all matches where the team played
     team_matches = df[
         (df["HomeTeam"] == team_name) | (df["AwayTeam"] == team_name)
     ].copy()
-
     if team_matches.empty:
         raise ValueError(f"Team '{team_name}' not found in historical data.")
 
-    # Get the absolute last chronological match played by this team
     last_match = team_matches.sort_values("Date").iloc[-1]
 
-    # We must extract the features identically to how the model was trained
-    # The model expects: Home_rolling_GoalsScored_sum_5, Home_rolling_GoalsConceded_sum_5, etc.
     if last_match["HomeTeam"] == team_name:
         stats = {
             "rolling_GoalsScored_sum_5": last_match["Home_rolling_GoalsScored_sum_5"],
@@ -55,7 +61,6 @@ def get_latest_team_stats(team_name: str, df: pd.DataFrame, is_home: bool) -> di
             ],
         }
 
-    # Re-prefix them based on where they are playing in the UPCOMING match
     prefix = "Home_" if is_home else "Away_"
     return {
         f"{prefix}rolling_GoalsScored_sum_5": stats["rolling_GoalsScored_sum_5"],
@@ -67,19 +72,20 @@ def run_inference():
     CACHE_FILE = Path("data/interim/live_odds_cache.json")
     PROCESSED_DATA_PATH = Path("data/processed/Serie_A_features.csv")
     MODEL_PATH = Path("models/rf_uo_production_v1.joblib")
+
+    # Financial Configuration
+    BANKROLL = 1000.00
     EV_THRESHOLD = 0.05
+    KELLY_FRACTION = 0.25  # Quarter Kelly
 
     if (
         not CACHE_FILE.exists()
         or not PROCESSED_DATA_PATH.exists()
         or not MODEL_PATH.exists()
     ):
-        print(
-            "[ERROR] Missing required files (Cache, CSV, or Model). Cannot run inference."
-        )
+        print("[ERROR] Missing required files. Cannot run inference.")
         return
 
-    print("[INFO] Loading Machine Learning components...")
     with open(CACHE_FILE, "r", encoding="utf-8") as f:
         upcoming_matches = json.load(f)
 
@@ -91,11 +97,10 @@ def run_inference():
 
     print("\n================= VALUE BETTING SCANNER =================")
     print(
-        f"Analyzing {len(upcoming_matches)} matches using Minimum EV Threshold: {EV_THRESHOLD * 100}%\n"
+        f"Bankroll: €{BANKROLL:.2f} | Strategy: Quarter-Kelly | Min EV: {EV_THRESHOLD * 100}%\n"
     )
 
     for match in upcoming_matches:
-        # Translate names
         raw_home = match["HomeTeam_API"]
         raw_away = match["AwayTeam_API"]
         home_team = TEAM_MAPPING.get(raw_home, raw_home)
@@ -108,11 +113,9 @@ def run_inference():
             print(f"[WARNING] Skipping {home_team} vs {away_team}: {e}")
             continue
 
-        # Construct the exact feature row expected by the model
         feature_dict = {**home_stats, **away_stats}
         X_infer = pd.DataFrame([feature_dict])
 
-        # Ensure column order matches training data exactly
         expected_cols = [
             "Home_rolling_GoalsScored_sum_5",
             "Home_rolling_GoalsConceded_sum_5",
@@ -121,7 +124,6 @@ def run_inference():
         ]
         X_infer = X_infer[expected_cols]
 
-        # Predict Probabilities
         probs = clf.predict_proba(X_infer)[0]
         prob_under = probs[class_mapping.get(0)]
         prob_over = probs[class_mapping.get(1)]
@@ -132,7 +134,6 @@ def run_inference():
         ev_under = (prob_under * odds_under) - 1
         ev_over = (prob_over * odds_over) - 1
 
-        # Determine if we have a bet
         best_bet = None
         if ev_under > EV_THRESHOLD and ev_under > ev_over:
             best_bet = "Under 2.5"
@@ -149,12 +150,16 @@ def run_inference():
             f"Match: {home_team} vs {away_team} (Pinnacle Odds: O:{odds_over} / U:{odds_under})"
         )
         print(
-            f"       -> Model Probabilities: Over {prob_over * 100:.1f}% | Under {prob_under * 100:.1f}%"
+            f"       -> Calibrated Probabilities: Over {prob_over * 100:.1f}% | Under {prob_under * 100:.1f}%"
         )
 
         if best_bet:
+            recommended_stake = calculate_kelly_stake(
+                selected_prob, selected_odds, BANKROLL, KELLY_FRACTION
+            )
             print(f"       💰 ACTION REQUIRED: Bet {best_bet} @ {selected_odds}")
             print(f"       📈 Expected Value (EV): +{selected_ev * 100:.2f}%")
+            print(f"       🎯 Recommended Stake: €{recommended_stake:.2f}")
         else:
             print("       ⏸️  PASS (No Value Found)")
         print("-" * 57)
