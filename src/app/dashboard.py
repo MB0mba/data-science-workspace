@@ -2,6 +2,7 @@
 dashboard.py
 Streamlit Web Application for the Quant Betting System.
 Provides a GUI to analyze upcoming Serie A matches and recommended Kelly stakes.
+Calculates target Betfair Exchange odds including a 4.5% commission.
 """
 
 import sys
@@ -87,6 +88,9 @@ def main():
         format_func=lambda x: f"{int(x * 100)}% Kelly",
     )
 
+    # Fixed Betfair Commission for Italian Market
+    BETFAIR_COMMISSION = 0.045
+
     # --- Load Components ---
     try:
         clf = load_model()
@@ -143,6 +147,7 @@ def main():
         target_odds = 0.0
         target_ev = 0.0
         stake = 0.0
+        betfair_target = 0.0
 
         if ev_under > ev_threshold and ev_under > ev_over:
             action = "BET UNDER 2.5"
@@ -151,6 +156,9 @@ def main():
             stake = calculate_kelly_stake(
                 prob_under, odds_under, bankroll, kelly_fraction
             )
+            # Calculate required Betfair odds to match target EV
+            betfair_target = ((target_odds - 1.0) / (1.0 - BETFAIR_COMMISSION)) + 1.0
+
         elif ev_over > ev_threshold and ev_over > ev_under:
             action = "BET OVER 2.5"
             target_odds = odds_over
@@ -158,6 +166,8 @@ def main():
             stake = calculate_kelly_stake(
                 prob_over, odds_over, bankroll, kelly_fraction
             )
+            # Calculate required Betfair odds to match target EV
+            betfair_target = ((target_odds - 1.0) / (1.0 - BETFAIR_COMMISSION)) + 1.0
 
         results_data.append(
             {
@@ -165,12 +175,13 @@ def main():
                 "Date (UTC)": match["CommenceTime"].replace("T", " ").replace("Z", ""),
                 "Action": action,
                 "Odds": target_odds if action != "PASS" else "-",
+                "Betfair Target (4.5%)": f"{betfair_target:.3f}"
+                if action != "PASS"
+                else "-",
                 "EV (%)": f"{target_ev * 100:.2f}%" if action != "PASS" else "-",
                 "Stake (€)": f"€{stake:.2f}" if action != "PASS" else "-",
                 "Prob Over": f"{prob_over * 100:.1f}%",
                 "Prob Under": f"{prob_under * 100:.1f}%",
-                "Pinnacle Over": odds_over,
-                "Pinnacle Under": odds_under,
             }
         )
 
@@ -186,7 +197,6 @@ def main():
         styled_df = df_results.style.apply(highlight_bets, axis=1)
 
         st.subheader("Actionable Intelligence")
-        # CORE FIX: Removed width="stretch" to maintain compatibility with older Streamlit versions
         st.dataframe(styled_df)
     else:
         st.info("No matches analyzed.")
