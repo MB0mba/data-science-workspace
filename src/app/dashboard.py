@@ -2,9 +2,10 @@
 dashboard.py
 Streamlit Web Application for the Quant Betting System.
 Provides a GUI to analyze upcoming Serie A matches and recommended Kelly stakes.
-Calculates target Betfair Exchange odds including a 4.5% commission.
+Calculates target Betfair Exchange odds (rounded UP) including a 4.5% commission.
 """
 
+import math
 import sys
 from pathlib import Path
 
@@ -147,7 +148,7 @@ def main():
         target_odds = 0.0
         target_ev = 0.0
         stake = 0.0
-        betfair_target = 0.0
+        safe_betfair_target = 0.0
 
         if ev_under > ev_threshold and ev_under > ev_over:
             action = "BET UNDER 2.5"
@@ -156,8 +157,9 @@ def main():
             stake = calculate_kelly_stake(
                 prob_under, odds_under, bankroll, kelly_fraction
             )
-            # Calculate required Betfair odds to match target EV
-            betfair_target = ((target_odds - 1.0) / (1.0 - BETFAIR_COMMISSION)) + 1.0
+            # Calculate required Betfair odds and strictly round UP to 2 decimals
+            raw_target = ((target_odds - 1.0) / (1.0 - BETFAIR_COMMISSION)) + 1.0
+            safe_betfair_target = math.ceil(raw_target * 100) / 100.0
 
         elif ev_over > ev_threshold and ev_over > ev_under:
             action = "BET OVER 2.5"
@@ -166,16 +168,17 @@ def main():
             stake = calculate_kelly_stake(
                 prob_over, odds_over, bankroll, kelly_fraction
             )
-            # Calculate required Betfair odds to match target EV
-            betfair_target = ((target_odds - 1.0) / (1.0 - BETFAIR_COMMISSION)) + 1.0
+            # Calculate required Betfair odds and strictly round UP to 2 decimals
+            raw_target = ((target_odds - 1.0) / (1.0 - BETFAIR_COMMISSION)) + 1.0
+            safe_betfair_target = math.ceil(raw_target * 100) / 100.0
 
         results_data.append(
             {
                 "Match": f"{home_team} vs {away_team}",
                 "Date (UTC)": match["CommenceTime"].replace("T", " ").replace("Z", ""),
                 "Action": action,
-                "Odds": target_odds if action != "PASS" else "-",
-                "Betfair Target (4.5%)": f"{betfair_target:.3f}"
+                "Odds": f"{target_odds:.2f}" if action != "PASS" else "-",
+                "Betfair Target (4.5%)": f"{safe_betfair_target:.2f}"
                 if action != "PASS"
                 else "-",
                 "EV (%)": f"{target_ev * 100:.2f}%" if action != "PASS" else "-",
