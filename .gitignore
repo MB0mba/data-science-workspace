@@ -17,3 +17,9 @@ __pycache__/
 
 # Ignore local prefernces
 .vscode/
+
+# Security and Environment
+.env
+
+# Serialized Models
+models/
